@@ -1,77 +1,91 @@
 #!/usr/bin/env python3
 """
-Standalone four-direction drive demo for the XiaoRGEEK-style motor board at I2C addr 0x18.
-No repo imports; only depends on smbus (I2C enabled on Pi).
+Standalone forward drive using the exact functions from wifirobots/python_src/hbwz_motor.py.
 
-Commands (write_word_data to addr 0x18, command register 0xFF):
-- 0x220A: forward
-- 0x230A: back
-- 0x240A: left
-- 0x250A: right
-- 0x210A: stop
-
-Wiring: I2C1 on Raspberry Pi (SDA=BCM2 pin3, SCL=BCM3 pin5, 3.3V, GND).
+Adds a probe mode to try alternative speed-register pairs in case your board
+revision maps the right-side channel differently.
 """
 
+import os
+import sys
 import time
-import smbus
 
-I2C_ADDR = 0x18
-CMD_REG = 0xFF
+# Allow importing the reference motor helpers.
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PY_SRC = os.path.join(ROOT, "wifirobots", "python_src")
+if PY_SRC not in sys.path:
+    sys.path.insert(0, PY_SRC)
 
-CMD_STOP = 0x210A
-CMD_FWD = 0x220A
-CMD_BACK = 0x230A
-CMD_LEFT = 0x240A
-CMD_RIGHT = 0x250A
+import hbwz_motor as motor
+import hbwz_i2c as i2c
 
-
-class MotorBoard:
-    def __init__(self, bus_id=1, addr=I2C_ADDR):
-        self.bus = smbus.SMBus(bus_id)
-        self.addr = addr
-
-    def send(self, value):
-        self.bus.write_word_data(self.addr, CMD_REG, value)
-        time.sleep(0.01)  # small gap for the MCU
-
-    def stop(self):
-        self.send(CMD_STOP)
-
-    def forward(self):
-        self.send(CMD_FWD)
-
-    def back(self):
-        self.send(CMD_BACK)
-
-    def left(self):
-        self.send(CMD_LEFT)
-
-    def right(self):
-        self.send(CMD_RIGHT)
+FORWARD_WORD = 0x220A  # direct forward command (addr 0x18, reg 0xFF)
 
 
-def demo(delay=1.0):
-    board = MotorBoard()
+def demo_forward(duration=4.0, speed=0xFF):
+    """Forward at given speed using reference helpers; reassert speeds mid-run."""
     try:
-        board.forward()
-        time.sleep(delay)
+        motor.SetSpeed.leftspeed(speed)
+        motor.SetSpeed.rightspeed(speed)
+        i2c.writeinstruction(FORWARD_WORD)
 
-        board.back()
-        time.sleep(delay)
-
-        board.left()
-        time.sleep(delay)
-
-        board.right()
-        time.sleep(delay)
-
+        # Reassert speeds once mid-run in case one channel misses a write.
+        time.sleep(duration / 2)
+        motor.SetSpeed.leftspeed(speed)
+        motor.SetSpeed.rightspeed(speed)
+        i2c.writeinstruction(FORWARD_WORD)
+        time.sleep(duration / 2)
     finally:
-        board.stop()
+        motor.SetcarStatus.carstop()
+
+
+def probe_registers(duration=1.0, speed=0xFF):
+    """Cycle through candidate speed registers to see which combos drive all wheels."""
+    candidates = [0x26, 0x27, 0x28, 0x29]  # 0x28/0x29 are used for motors 5/6 in reference
+    try:
+        for left_reg in candidates:
+            for right_reg in candidates:
+                # Write speeds directly via I2C to test this pair
+                i2c.writeinstruction((left_reg << 8) | speed)
+                i2c.writeinstruction((right_reg << 8) | speed)
+                motor.SetcarStatus.carforward()
+                time.sleep(duration)
+                motor.SetcarStatus.carstop()
+                time.sleep(0.2)
+    finally:
+        motor.SetcarStatus.carstop()
+
+
+def right_only(duration=3.0, speed=0xFF):
+    """Debug helper: drive only the right channel to confirm it responds."""
+    try:
+        motor.SetSpeed.leftspeed(0)
+        motor.SetSpeed.rightspeed(speed)
+        motor.SetcarStatus.carforward()
+        time.sleep(duration)
+    finally:
+        motor.SetcarStatus.carstop()
+
+
+def left_only(duration=3.0, speed=0xFF):
+    """Debug helper: drive only the left channel to confirm it responds."""
+    try:
+        motor.SetSpeed.leftspeed(speed)
+        motor.SetSpeed.rightspeed(0)
+        motor.SetcarStatus.carforward()
+        time.sleep(duration)
+    finally:
+        motor.SetcarStatus.carstop()
 
 
 def main():
-    demo()
+    # Try the known-good path first
+    # demo_forward()
+    # Or isolate channels:
+    # right_only()
+    # left_only()
+    # Or brute-force register pairs:
+    probe_registers()
 
 
 if __name__ == "__main__":
