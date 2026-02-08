@@ -1,0 +1,16 @@
+[Unit]
+Description=Robo web control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/robo/robo
+ExecStart=/usr/bin/python3 /home/robo/robo/web_control.py
+Restart=on-failure
+User=robo
+Group=robo
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
