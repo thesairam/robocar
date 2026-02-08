@@ -1,8 +1,11 @@
+import os
 from flask import Flask, abort, redirect, render_template_string, url_for
 import atexit
 import robo
 
 app = Flask(__name__)
+
+DEFAULT_SPEED = int(getattr(robo, "current_speed", 60))
 
 ACTIONS = {
     "start": robo.start,
@@ -10,7 +13,7 @@ ACTIONS = {
     "reverse": robo.reverse,
     "left": robo.left,
     "right": robo.right,
-    "stop": robo.stop,
+    "turnoff": robo.stop,
 }
 
 PAGE_TEMPLATE = """
@@ -47,7 +50,7 @@ PAGE_TEMPLATE = """
 <body>
     <div class=\"wrap\">
         <h1>Robo Control Panel</h1>
-        <p class=\"sub\">Drag the joystick to steer. Release to stop. Quick buttons stay as backup.</p>
+        <p class=\"sub\">Drag the joystick to steer. Release to turn off outputs. Quick buttons stay as backup.</p>
         <div class=\"layout\">
             <div class=\"panel\">
                 <div class=\"joystick\" data-joystick>
@@ -63,7 +66,12 @@ PAGE_TEMPLATE = """
                     <button data-command=\"reverse\">Reverse</button>
                     <button data-command=\"left\">Left</button>
                     <button data-command=\"right\">Right</button>
-                    <button class=\"danger\" data-command=\"stop\">Stop</button>
+                    <button class="danger" data-command="turnoff">Turn off</button>
+                        <div style="margin-top:10px;">
+                            <label for="speed" style="display:block;margin-bottom:6px;color:var(--muted);font-size:13px;">Speed</label>
+                            <input id="speed" data-speed type="range" min="0" max="100" value="{{ speed }}" style="width:100%;" />
+                            <div style="margin-top:6px;font-size:13px;color:var(--muted);">Current: <span data-speed-value>{{ speed }}</span>%</div>
+                        </div>
                 </div>
                 <div class=\"status\" style=\"margin-top:12px;\">
                     <span class=\"badge\">Live</span>
@@ -77,18 +85,20 @@ PAGE_TEMPLATE = """
         const knob = document.querySelector('[data-knob]');
         const statusEl = document.querySelector('[data-status]');
         const buttons = document.querySelectorAll('[data-command]');
+        const speedInput = document.querySelector('[data-speed]');
+        const speedValue = document.querySelector('[data-speed-value]');
 
         const maxRadius = 90; // pixels from center
         const deadZone = 14; // ignore small jitter
         let pointerId = null;
-        let lastCommand = 'stop';
+        let lastCommand = 'turnoff';
 
         const setStatus = (text) => { statusEl.textContent = text; };
 
         const sendCommand = async (cmd) => {
             if (!cmd || cmd === lastCommand) return;
             lastCommand = cmd;
-            setStatus(cmd === 'stop' ? 'Stopped' : `Command: ${cmd}`);
+            setStatus(cmd === 'turnoff' ? 'Turned off' : `Command: ${cmd}`);
             try {
                 await fetch(`/action/${cmd}`, { method: 'POST' });
             } catch (err) {
@@ -102,7 +112,7 @@ PAGE_TEMPLATE = """
 
         const directionFromVector = (x, y) => {
             const dist = Math.hypot(x, y);
-            if (dist < deadZone) return 'stop';
+            if (dist < deadZone) return 'turnoff';
             if (Math.abs(x) > Math.abs(y)) {
                 return x > 0 ? 'right' : 'left';
             }
@@ -125,7 +135,7 @@ PAGE_TEMPLATE = """
 
         const resetKnob = () => {
             moveKnob(0, 0);
-            sendCommand('stop');
+            sendCommand('turnoff');
         };
 
         joystick.addEventListener('pointerdown', (event) => {
@@ -160,8 +170,24 @@ PAGE_TEMPLATE = """
             ArrowDown: 'reverse',
             ArrowLeft: 'left',
             ArrowRight: 'right',
-            ' ': 'stop'
+            ' ': 'turnoff'
         };
+
+        const updateSpeed = async (value) => {
+                const clamped = Math.max(0, Math.min(100, Number(value)));
+                speedValue.textContent = clamped;
+            try {
+                    await fetch(`/speed/${clamped}`, { method: 'POST' });
+            } catch (err) {
+                setStatus('Speed update failed');
+            }
+        };
+
+        if (speedInput) {
+            speedInput.addEventListener('input', (event) => {
+                updateSpeed(event.target.value);
+            });
+        }
 
         document.addEventListener('keydown', (event) => {
             const cmd = keyMap[event.key];
@@ -174,7 +200,7 @@ PAGE_TEMPLATE = """
             const cmd = keyMap[event.key];
             if (!cmd) return;
             event.preventDefault();
-            sendCommand('stop');
+            sendCommand('turnoff');
         });
     </script>
 </body>
@@ -184,7 +210,7 @@ PAGE_TEMPLATE = """
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template_string(PAGE_TEMPLATE)
+    return render_template_string(PAGE_TEMPLATE, speed=DEFAULT_SPEED)
 
 
 @app.post("/action/<command>")
@@ -194,6 +220,15 @@ def handle_action(command: str):
         abort(404)
     action()
     return redirect(url_for("index"))
+
+
+@app.post("/speed/<int:value>")
+def handle_speed(value: int):
+    try:
+        robo.set_speed(value)
+    except Exception:
+        abort(400)
+    return ("", 204)
 
 
 aexit_cleanup_registered = False
@@ -210,4 +245,5 @@ _register_cleanup_once()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)

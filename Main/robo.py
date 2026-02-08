@@ -1,84 +1,150 @@
-import atexit
 import RPi.GPIO as GPIO
 import time
+import atexit
 
+# -------------------
+# GPIO setup (BCM)
+# -------------------
 GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
 
+# Motor A (left)
 IN1, IN2, ENA = 17, 27, 22
+# Motor B (right)
 IN3, IN4, ENB = 23, 24, 25
 
+pins = [IN1, IN2, ENA, IN3, IN4, ENB]
+GPIO.setup(pins, GPIO.OUT)
 
-def _setup():
-        for pin in [IN1, IN2, IN3, IN4, ENA, ENB]:
-                GPIO.setup(pin, GPIO.OUT)
+# -------------------
+# PWM @ 5 kHz
+# -------------------
+PWM_FREQ = 5000
+pwmA = GPIO.PWM(ENA, PWM_FREQ)
+pwmB = GPIO.PWM(ENB, PWM_FREQ)
 
-        pwm_a = GPIO.PWM(ENA, 5000)
-        pwm_b = GPIO.PWM(ENB, 5000)
-        pwm_a.start(100)
-        pwm_b.start(100)
-        return pwm_a, pwm_b
+# -------------------
+# Vehicle state
+# -------------------
+engine_on = False
+current_speed = 60  # 0–100
 
+# -------------------
+# Core controls
+# -------------------
+def start():
+    """Ignition ON"""
+    global engine_on
+    if not engine_on:
+        pwmA.start(0)
+        pwmB.start(0)
+        engine_on = True
+        print("Engine ON")
 
-_pwmA, _pwmB = _setup()
+def stop():
+    """Ignition OFF"""
+    global engine_on
+    if engine_on:
+        try:
+            pwmA.ChangeDutyCycle(0)
+            pwmB.ChangeDutyCycle(0)
+        finally:
+            try:
+                pwmA.stop()
+            except Exception:
+                pass
+            try:
+                pwmB.stop()
+            except Exception:
+                pass
+        engine_on = False
+        print("Engine OFF")
 
+def set_speed(speed):
+    global current_speed
+    current_speed = max(0, min(100, speed))
+    if engine_on:
+        pwmA.ChangeDutyCycle(current_speed)
+        pwmB.ChangeDutyCycle(current_speed)
 
-def set_speed(duty_cycle: float) -> None:
-        duty = max(0, min(100, duty_cycle))
-        _pwmA.ChangeDutyCycle(duty)
-        _pwmB.ChangeDutyCycle(duty)
+# -------------------
+# Motion commands
+# -------------------
+def forward():
+    if not engine_on:
+        return
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    set_speed(current_speed)
 
+def reverse():
+    if not engine_on:
+        return
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    set_speed(current_speed)
 
-def forward() -> None:
-        GPIO.output(IN1, GPIO.HIGH)
-        GPIO.output(IN2, GPIO.LOW)
-        GPIO.output(IN3, GPIO.HIGH)
-        GPIO.output(IN4, GPIO.LOW)
+def right():
+    if not engine_on:
+        return
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+    GPIO.output(IN3, GPIO.HIGH)
+    GPIO.output(IN4, GPIO.LOW)
+    set_speed(current_speed)
 
+def left():
+    if not engine_on:
+        return
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+    GPIO.output(IN3, GPIO.LOW)
+    GPIO.output(IN4, GPIO.HIGH)
+    set_speed(current_speed)
 
-def reverse() -> None:
-        GPIO.output(IN1, GPIO.LOW)
-        GPIO.output(IN2, GPIO.HIGH)
-        GPIO.output(IN3, GPIO.LOW)
-        GPIO.output(IN4, GPIO.HIGH)
-
-
-def right() -> None:
-        GPIO.output(IN1, GPIO.LOW)
-        GPIO.output(IN2, GPIO.HIGH)
-        GPIO.output(IN3, GPIO.HIGH)
-        GPIO.output(IN4, GPIO.LOW)
-
-
-def left() -> None:
-        GPIO.output(IN1, GPIO.HIGH)
-        GPIO.output(IN2, GPIO.LOW)
-        GPIO.output(IN3, GPIO.LOW)
-        GPIO.output(IN4, GPIO.HIGH)
-
-
-def start() -> None:
-        forward()
-
-
-def stop() -> None:
-        for pin in [IN1, IN2, IN3, IN4]:
-                GPIO.output(pin, GPIO.LOW)
-
-
-def cleanup() -> None:
+# -------------------
+# Cleanup ONLY at exit
+# -------------------
+def cleanup():
+    global pwmA, pwmB, engine_on
+    if engine_on:
         stop()
-        _pwmA.stop()
-        _pwmB.stop()
-        GPIO.cleanup()
-
+    # Ensure PWM objects are not left for __del__ when GPIO already torn down
+    try:
+        pwmA.stop()
+    except Exception:
+        pass
+    try:
+        pwmB.stop()
+    except Exception:
+        pass
+    pwmA = None
+    pwmB = None
+    GPIO.cleanup()
 
 atexit.register(cleanup)
 
-
+# -------------------
+# Example usage
+# -------------------
 if __name__ == "__main__":
-        try:
-                forward()
-                time.sleep(10)
-                stop()
-        finally:
-                cleanup()
+    start()            # ignition on
+    set_speed(50)
+    forward()
+    time.sleep(2)
+
+    left()
+    time.sleep(1)
+
+    stop()             # ignition off
+    time.sleep(2)
+
+    start()            # ignition on again
+    reverse()
+    time.sleep(2)
+
+    stop()
