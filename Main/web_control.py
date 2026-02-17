@@ -50,7 +50,7 @@ PAGE_TEMPLATE = """
 <body>
     <div class=\"wrap\">
         <h1>Robo Control Panel</h1>
-        <p class=\"sub\">Drag the joystick to steer. Release to turn off outputs. Quick buttons stay as backup.</p>
+        <p class=\"sub\">Drag the joystick to steer. Release keeps the last command; use buttons to start/stop.</p>
         <div class=\"layout\">
             <div class=\"panel\">
                 <div class=\"joystick\" data-joystick>
@@ -91,7 +91,7 @@ PAGE_TEMPLATE = """
         const maxRadius = 90; // pixels from center
         const deadZone = 14; // ignore small jitter
         let pointerId = null;
-        let lastCommand = 'turnoff';
+        let lastCommand = null;
 
         const setStatus = (text) => { statusEl.textContent = text; };
 
@@ -112,7 +112,7 @@ PAGE_TEMPLATE = """
 
         const directionFromVector = (x, y) => {
             const dist = Math.hypot(x, y);
-            if (dist < deadZone) return 'turnoff';
+            if (dist < deadZone) return null; // stay in last commanded state
             if (Math.abs(x) > Math.abs(y)) {
                 return x > 0 ? 'right' : 'left';
             }
@@ -130,12 +130,12 @@ PAGE_TEMPLATE = """
             const clampedY = y * scale;
             moveKnob(clampedX, clampedY);
             const dir = directionFromVector(x, y);
-            sendCommand(dir);
+            if (dir) sendCommand(dir);
         };
 
         const resetKnob = () => {
             moveKnob(0, 0);
-            sendCommand('turnoff');
+            // keep outputs as-is; rely on buttons for start/stop
         };
 
         joystick.addEventListener('pointerdown', (event) => {
@@ -153,6 +153,7 @@ PAGE_TEMPLATE = """
             if (event.pointerId !== pointerId) return;
             pointerId = null;
             joystick.releasePointerCapture(event.pointerId);
+            lastCommand = null; // allow re-sending same direction next time
             resetKnob();
         };
 
@@ -200,7 +201,7 @@ PAGE_TEMPLATE = """
             const cmd = keyMap[event.key];
             if (!cmd) return;
             event.preventDefault();
-            sendCommand('turnoff');
+            lastCommand = null; // clear so next press re-sends
         });
     </script>
 </body>
